@@ -1,0 +1,419 @@
+---
+title: "miRNA pipeline: parse counts"
+author: "RWH"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+
+output: 
+  html_document:
+    theme: yeti 
+    highlight: pygments 
+    anchor_sections: FALSE
+---
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = TRUE) 
+
+library(tidyverse)
+library(here)
+library(edgeR)
+
+dir_scripts <- here("scripts")
+dir_save <- here(dir_data, "RMD_output")
+
+source(here(dir_scripts, "plotting_themes.R"))
+source(here(dir_scripts, "plotting.R"))
+source(here(dir_scripts, "analysis.R"))
+
+```
+
+```{r set_parameters}
+
+# set as "mature", "stemloop" or "combined"
+# analysis_scope <- "mature" 
+
+# filtering
+# to keep a gene, must be present above cpm threshold on n samples
+cpm_threshold <- 0.1     # 0.1   
+n_samples <- 8         
+
+```
+
+<br>
+<br>
+
+## Analysis parameters  
+
+This analysis looks at `r # analysis_scope` reads mapping to mature forms of miRNA.  
+
+When filtering data, genes are retained if they are expressed at levels over `r cpm_threshold` cpm in at least `r n_samples` libraries.  
+
+<br>
+<br>
+
+## Constructing DGEList object in edgeR
+
+DGEList contains:  
+
+- counts = matrix of counts
+- samples = df of sample information, to include group & lib.size  
+- genes (optional) = df of gene annotation features
+
+
+```{r import_counts, message = FALSE}
+
+import_counts <- function(dir, species) {
+  
+  list.files(here(dir), 
+             pattern = paste0(species, ".deduplicated.txt"), 
+             full.names = FALSE) %>% 
+    gsub(paste0(".trim.fq.", species, ".deduplicated.txt"), "", .) -> filenames
+
+  data.frame("source" = 1:length(filenames), 
+             fn = filenames[1:length(filenames)]) -> fn_lookup
+  
+  fn_lookup$source <- fn_lookup$source %>% as.character()
+
+
+  list.files(here(dir), 
+             pattern = paste0(species, ".deduplicated.txt"),
+             full.names = TRUE) %>% 
+    map_dfr(read_delim, delim = "\t", .id = "source", col_names = c("gene", "count")) %>% 
+    left_join(fn_lookup) %>% 
+    select(library = fn, gene, count) %>% 
+    pivot_wider(names_from = library, values_from = count) -> df_rawcounts
+  
+  df_rawcounts <- df_rawcounts %>% rowwise() %>% mutate(total = sum(c_across(-gene)))
+  df_rawcounts <- df_rawcounts %>% filter(total > 0) %>% select(-total) 
+  
+  df_rawcounts %>% 
+    mutate(genome = species) %>% 
+    return()
+
+}
+
+import_counts(here(dir_data, "counts"), "dog") -> df_rawcounts_dog
+import_counts(here(dir_data, "counts"), "mouse") -> df_rawcounts_mouse
+import_counts(here(dir_data, "counts"), "human") -> df_rawcounts_human
+
+df_rawcounts <- rbind(df_rawcounts_dog, df_rawcounts_mouse, df_rawcounts_human)
+
+```
+
+```{r merge_stemloop, include = FALSE}
+
+# df_rawcounts_mature %>% 
+#   pivot_longer(cols = -gene, names_to = "library", values_to = "mature") -> df_m_L
+# 
+# df_m_L$gene <- tolower(df_m_L$gene)
+# 
+# df_rawcounts_stemloop %>% 
+#   pivot_longer(cols = -gene, names_to = "library", values_to = "stemloop") -> df_sl_L
+# 
+# df_sl_L$gene <- tolower(df_sl_L$gene)
+# 
+# df_L <- full_join(df_m_L, df_sl_L, by = c("gene", "library"))
+# df_L[is.na(df_L)] <- 0
+# df_L %>% mutate(total = mature + stemloop) -> df_L
+# 
+# 
+# if (analysis_scope == "mature") {
+# 
+# df_L %>% 
+#   select(gene, library, mature) %>% 
+#   pivot_wider(names_from = library, values_from = mature) -> df_rawcounts
+# 
+# }
+# 
+# if (analysis_scope == "stemloop") {
+# 
+# df_L %>% 
+#   select(gene, library, stemloop) %>% 
+#   pivot_wider(names_from = library, values_from = stemloop) -> df_rawcounts
+# 
+# }
+# 
+# if (analysis_scope == "combined") {
+# 
+# df_L %>% 
+#   select(gene, library, total) %>% 
+#   pivot_wider(names_from = library, values_from = total) -> df_rawcounts
+# 
+# }
+
+```
+
+
+```{r import_metadata}
+
+df_samples <- read_csv(here(dir_data, "meta.csv"))
+source(here(dir_scripts, "repair_names.R"))
+
+read_delim(here(dir_data, "counts", "lib_size.txt")) %>% 
+  rename(lib.size = reads) -> df_libsize
+
+df_libsize$sample <- df_libsize$library %>% gsub(".trim.fq", "", .)
+left_join(df_samples, df_libsize) -> df_samples
+
+```
+
+<br>
+<br>
+
+Extent of mapping.  Note that in this analysis, the denominator is the total number of reads in the trimmed libraries (i.e. before deduplication).  Therefore this will include duplicate UMIs and so will end up slightly under-estimating the proportion of deduplicated reads that are mapped.  
+
+```{r count_mapping}
+
+df_rawcounts %>% 
+  pivot_longer(cols = c(-gene, -genome), names_to = "library", values_to = "count") %>% 
+  group_by(library, genome) %>% 
+  summarise(
+    total_reads = sum(count)
+  ) -> df_map_summary
+
+df_libsize %>%
+  select(sample, lib.size) %>% 
+  left_join(df_map_summary, ., by = c("library" = "sample")) %>% 
+  mutate(
+    mapped_pc = (total_reads / lib.size)*100
+    ) -> df_map_summary
+
+df_map_summary$genome %>% 
+  as.factor() %>% 
+  fct_relevel("dog", "mouse", "human") %>% 
+  fct_rev() -> df_map_summary$genome
+
+df_map_summary %>% 
+  ggplot(aes(x = library, y = mapped_pc, fill = genome)) +
+    geom_col() +
+    coord_flip() +
+    theme_miR_vertical() +
+    sf_miR_3_groups
+
+```
+
+
+### Make DGL object
+
+```{r make_dgl}
+
+# convert rawcounts to named matrix
+df_rawcounts <- df_rawcounts %>% select(-genome)
+df_rawcounts[is.na(df_rawcounts)] <- 0
+
+genes <- df_rawcounts$gene
+df_rawcounts <- df_rawcounts %>% select(-gene)
+rownames(df_rawcounts) <- genes
+
+rawcounts <- data.matrix(df_rawcounts)
+
+
+# construct DGEList
+dgl <- DGEList(
+  counts = rawcounts,
+  samples = select(df_samples, -group, -lib.size),
+  lib.size = df_samples$lib.size,
+  group = df_samples$group
+)
+
+```
+
+There are `r nrow(dgl)` genes in the raw dataset. 
+
+Structure of sample data (showing first 6 samples):  
+
+```{r print_dgl}
+dgl$samples %>% head() %>% knitr::kable()
+```
+
+
+<br>
+<br>
+
+## Filter
+
+Filter out low-abundance reads.  (Can also collapse technical replicates at this point.)  
+
+```{r get_cpm}
+
+counts_raw <- dgl$counts %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
+counts_cpm <- cpm(dgl) %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
+
+counts_raw <- counts_raw %>% rowwise() %>% mutate(mean = mean(c_across(-gene))) %>% arrange(-mean) 
+counts_cpm <- counts_cpm %>% rowwise() %>% mutate(mean = mean(c_across(-gene))) %>% arrange(-mean) 
+
+counts_raw %>% 
+  select(-gene, -mean) %>% 
+  colSums() %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("library") %>% 
+  select(library, total_raw = value) -> counts_raw_bylib
+
+counts_cpm %>% 
+  select(-gene, -mean) %>% 
+  colSums() %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("library") %>% 
+  mutate(
+    edgr_cpm = value,
+#   cpm = round(value, 0),
+    mapped = value/1e6,
+    `mapped_%` = mapped*100
+  ) %>% 
+  select(-value) -> counts_cpm_bylib
+
+df_samples %>% 
+  select(library = sample, group, `library size` = lib.size) %>%
+  left_join(counts_cpm_bylib, .) %>% 
+  left_join(counts_raw_bylib) %>% 
+  mutate(
+    manual_cpm = total_raw / `library size` * 1e6) -> counts_cpm_summary
+
+# counts_cpm_summary %>%
+#   ggplot(aes(x = edgr_cpm, y = manual_cpm)) +
+#     geom_point() +
+#     coord_fixed() +
+#     geom_abline(intercept = 0, gradient = 1) +
+#     theme_miR()
+
+counts_cpm_summary %>% 
+  ggplot(aes(x = group, y = `mapped_%`)) +
+  geom_jitter(alpha = 0.6, width = 0.1) +
+  ylim(0, NA) +
+  ylab('mapped reads \n(% of total reads)') +
+  theme_miR_horizontal() 
+
+```
+
+<br>
+<br>
+
+Raw counts for 10 most highly-expressed genes in first 8 samples: 
+
+```{r print_raw}
+counts_raw[,1:9] %>% head(n = 10) %>% knitr::kable()
+```
+
+
+Same counts expressed as cpm:
+
+```{r print_cpm}
+counts_cpm[,1:9] %>% head(n = 10) %>% knitr::kable(digits = 0)
+
+```
+
+
+Distribution of gene abundance:
+
+```{r plot_cpm}
+
+library(scales)
+
+counts_cpm %>% 
+  filter(mean > 0) %>% 
+    ggplot(aes(x = mean)) + 
+      geom_histogram(alpha = 0.6, fill = "blue") + 
+      scale_x_log10(labels = function(x) sprintf("%g", x)) + 
+      ylab("number of genes") +
+      xlab("cpm (mean across all libraries)") +
+      geom_vline(aes(xintercept = cpm_threshold), colour = "red", linetype = 2) +
+      theme_miR()
+
+```
+
+We then filter out any genes that are not expressed at more than `r cpm_threshold` in at least `r n_samples` samples.
+
+```{r filter_cpm}
+
+dgl <- dgl[rowSums(cpm(dgl) >= cpm_threshold) >= n_samples, , keep.lib.sizes=FALSE]
+dgl <- calcNormFactors(dgl)
+
+```
+
+There are `r nrow(dgl)` genes in the filtered dataset.    
+
+
+```{r filter_edgeR_manual, include=FALSE}
+
+# keep <- filterByExpr(dgl)
+# dgl <- dgl[keep, , keep.lib.sizes=FALSE]
+# 
+# print(paste0("number of rows = ", nrow(dgl)))
+# dgl$samples %>% knitr::kable()
+
+```
+
+
+<br>
+<br>
+
+## Normalise
+
+Normalise using TMM (trimmed median of M-values) method.  
+
+```{r normalise}
+
+# normalise reads
+dgl <- calcNormFactors(dgl, method = "TMM")
+
+dgl$samples %>% head() %>% knitr::kable()
+
+```
+
+
+<br>
+<br>
+
+## Unbiased exploration
+
+### MDS (multi-dimensional scaling plot)
+
+```{r MDS}
+
+plotMDS(
+  dgl, 
+  gene.selection = 'pairwise',
+  col = as.integer(dgl$samples$group), # colour
+  labels = dgl$samples$library 
+)
+
+```
+
+<br>
+<br>
+
+### Principle component analysis (PCA)
+
+```{r PCA}
+
+pca <- pca_plot(dgl, labels = 'library', color = 'group', 'PC1','PC2') 
+pca$scree_plot
+pca$pca_plot + sc_miR_groups
+
+pca <- pca_plot(dgl, labels = 'library', color = 'group', 'PC1','PC3') 
+pca$pca_plot + sc_miR_groups
+
+pca <- pca_plot(dgl, labels = 'library', color = 'group', 'PC2','PC3') 
+pca$pca_plot + sc_miR_groups
+
+
+```
+
+
+Significance testing:
+
+```{r pca_pvals}
+
+pca_pvals(pca$pca, c('group'), dgl) %>% knitr::kable()
+
+```
+
+```{r save_dgl}
+
+list(
+  df_samples = df_samples,
+  contrast_name = contrast_name,
+  dgl = dgl) %>% saveRDS(file = here(dir_save, "dea_objects.rds"))
+
+```
+

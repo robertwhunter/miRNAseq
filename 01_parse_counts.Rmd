@@ -16,9 +16,10 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = TRUE)
 
 library(tidyverse)
 library(here)
+# library(HTSFilter)
 library(edgeR)
 
-dir_scripts <- here("scripts")
+dir_scripts <- here(dir_root, "scripts")
 dir_save <- here(dir_data, "RMD_output")
 
 source(here(dir_scripts, "plotting_themes.R"))
@@ -34,8 +35,20 @@ source(here(dir_scripts, "analysis.R"))
 
 # filtering
 # to keep a gene, must be present above cpm threshold on n samples
-cpm_threshold <- 0.1     # 0.1   
-n_samples <- 8         
+# cpm_threshold <- 1        
+# n_samples <- 8         
+
+miR_spike_in <- "cel-miR-39"
+norm_method <- "TMM" # TMM or spike
+
+```
+
+<br>
+<br>
+
+## Overview of experimental design
+
+```{r experimental_description, child=here(dir_data, "exp_setup.txt"), warning=FALSE}
 
 ```
 
@@ -46,7 +59,7 @@ n_samples <- 8
 
 This analysis looks at `r # analysis_scope` reads mapping to mature forms of miRNA.  
 
-When filtering data, genes are retained if they are expressed at levels over `r cpm_threshold` cpm in at least `r n_samples` libraries.  
+<!-- When filtering data, genes are retained if they are expressed at levels over `r # cpm_threshold` cpm in at least `r # n_samples` libraries.  -->
 
 <br>
 <br>
@@ -62,41 +75,9 @@ DGEList contains:
 
 ```{r import_counts, message = FALSE}
 
-import_counts <- function(dir, species) {
-  
-  list.files(here(dir), 
-             pattern = paste0(species, ".deduplicated.txt"), 
-             full.names = FALSE) %>% 
-    gsub(paste0(".trim.fq.", species, ".deduplicated.txt"), "", .) -> filenames
+# source(here(dir_data, "x1_import_counts.R"))
 
-  data.frame("source" = 1:length(filenames), 
-             fn = filenames[1:length(filenames)]) -> fn_lookup
-  
-  fn_lookup$source <- fn_lookup$source %>% as.character()
-
-
-  list.files(here(dir), 
-             pattern = paste0(species, ".deduplicated.txt"),
-             full.names = TRUE) %>% 
-    map_dfr(read_delim, delim = "\t", .id = "source", col_names = c("gene", "count")) %>% 
-    left_join(fn_lookup) %>% 
-    select(library = fn, gene, count) %>% 
-    pivot_wider(names_from = library, values_from = count) -> df_rawcounts
-  
-  df_rawcounts <- df_rawcounts %>% rowwise() %>% mutate(total = sum(c_across(-gene)))
-  df_rawcounts <- df_rawcounts %>% filter(total > 0) %>% select(-total) 
-  
-  df_rawcounts %>% 
-    mutate(genome = species) %>% 
-    return()
-
-}
-
-import_counts(here(dir_data, "counts"), "dog") -> df_rawcounts_dog
-import_counts(here(dir_data, "counts"), "mouse") -> df_rawcounts_mouse
-import_counts(here(dir_data, "counts"), "human") -> df_rawcounts_human
-
-df_rawcounts <- rbind(df_rawcounts_dog, df_rawcounts_mouse, df_rawcounts_human)
+df_rawcounts <- read_csv(here(dir_save, "rawcounts.csv"))
 
 ```
 
@@ -147,13 +128,15 @@ df_rawcounts <- rbind(df_rawcounts_dog, df_rawcounts_mouse, df_rawcounts_human)
 ```{r import_metadata}
 
 df_samples <- read_csv(here(dir_data, "meta.csv"))
-source(here(dir_scripts, "repair_names.R"))
 
 read_delim(here(dir_data, "counts", "lib_size.txt")) %>% 
   rename(lib.size = reads) -> df_libsize
 
 df_libsize$sample <- df_libsize$library %>% gsub(".trim.fq", "", .)
 left_join(df_samples, df_libsize) -> df_samples
+
+source(here(dir_data, "x2_repair_names.R"))
+
 
 ```
 
@@ -180,14 +163,18 @@ df_libsize %>%
 
 df_map_summary$genome %>% 
   as.factor() %>% 
-  fct_relevel("dog", "mouse", "human") %>% 
+  fct_relevel("spike", "dog", "mouse", "human") %>% 
   fct_rev() -> df_map_summary$genome
 
+df_samples_short <- df_samples %>% select(library = sample, group)
+
 df_map_summary %>% 
+  left_join(df_samples_short) %>% 
   ggplot(aes(x = library, y = mapped_pc, fill = genome)) +
     geom_col() +
     coord_flip() +
     theme_miR_vertical() +
+    facet_wrap(~group) +
     sf_miR_3_groups
 
 ```
@@ -198,32 +185,38 @@ df_map_summary %>%
 ```{r make_dgl}
 
 # convert rawcounts to named matrix
-df_rawcounts <- df_rawcounts %>% select(-genome)
-df_rawcounts[is.na(df_rawcounts)] <- 0
+df_rawcounts_trim <- df_rawcounts %>% select(-genome)
+df_rawcounts_trim[is.na(df_rawcounts_trim)] <- 0
 
-genes <- df_rawcounts$gene
-df_rawcounts <- df_rawcounts %>% select(-gene)
-rownames(df_rawcounts) <- genes
+genes <- df_rawcounts_trim$gene
+df_rawcounts_trim <- df_rawcounts_trim %>% select(-gene)
+rownames(df_rawcounts_trim) <- genes
 
-rawcounts <- data.matrix(df_rawcounts)
+rawcounts <- data.matrix(df_rawcounts_trim)
+
+
+# remove spike-in
+spike_in_index <- which(rownames(rawcounts) == miR_spike_in)
+spike_in_factor <- as.numeric(rawcounts[spike_in_index, ] / colSums(rawcounts))
+rawcounts_without_spikein <- rawcounts[rownames(rawcounts) != miR_spike_in, ]
 
 
 # construct DGEList
-dgl <- DGEList(
-  counts = rawcounts,
+dgl_raw <- DGEList(
+  counts = rawcounts_without_spikein,
   samples = select(df_samples, -group, -lib.size),
-  lib.size = df_samples$lib.size,
+  lib.size = df_samples$lib.size,                       # think this really affects the filtering step
   group = df_samples$group
 )
 
 ```
 
-There are `r nrow(dgl)` genes in the raw dataset. 
+There are `r nrow(dgl_raw)` genes in the raw dataset. 
 
 Structure of sample data (showing first 6 samples):  
 
 ```{r print_dgl}
-dgl$samples %>% head() %>% knitr::kable()
+dgl_raw$samples %>% head() %>% knitr::kable()
 ```
 
 
@@ -236,8 +229,8 @@ Filter out low-abundance reads.  (Can also collapse technical replicates at this
 
 ```{r get_cpm}
 
-counts_raw <- dgl$counts %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
-counts_cpm <- cpm(dgl) %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
+counts_raw <- dgl_raw$counts %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
+counts_cpm <- cpm(dgl_raw) %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
 
 counts_raw <- counts_raw %>% rowwise() %>% mutate(mean = mean(c_across(-gene))) %>% arrange(-mean) 
 counts_cpm <- counts_cpm %>% rowwise() %>% mutate(mean = mean(c_across(-gene))) %>% arrange(-mean) 
@@ -288,6 +281,7 @@ counts_cpm_summary %>%
 <br>
 <br>
 
+<!-- 
 Raw counts for 10 most highly-expressed genes in first 8 samples: 
 
 ```{r print_raw}
@@ -316,21 +310,48 @@ counts_cpm %>%
       scale_x_log10(labels = function(x) sprintf("%g", x)) + 
       ylab("number of genes") +
       xlab("cpm (mean across all libraries)") +
-      geom_vline(aes(xintercept = cpm_threshold), colour = "red", linetype = 2) +
+#      geom_vline(aes(xintercept = cpm_threshold), colour = "red", linetype = 2) +
       theme_miR()
 
 ```
 
-We then filter out any genes that are not expressed at more than `r cpm_threshold` in at least `r n_samples` samples.
+-->
 
-```{r filter_cpm}
+We then filter out any genes that are not expressed at high abundance.  
 
-dgl <- dgl[rowSums(cpm(dgl) >= cpm_threshold) >= n_samples, , keep.lib.sizes=FALSE]
-dgl <- calcNormFactors(dgl)
+```{r filter_manual_archived}
+
+# dgl <- dgl[rowSums(cpm(dgl) >= cpm_threshold) >= n_samples, , keep.lib.sizes=FALSE]
+
+dgl_keep <- filterByExpr(dgl_raw)     # this accesses group (or can supply a different design)
+dgl <- dgl_raw[dgl_keep, , keep.lib.sizes=FALSE]
+
 
 ```
 
-There are `r nrow(dgl)` genes in the filtered dataset.    
+
+```{r filter_auto}
+
+# dgl_filter <- HTSFilter(dgl_raw, normalization = "TMM", plot = FALSE)
+# 
+# dgl <- dgl_filter$filteredData
+# 
+libsize_raw <- dgl_raw$samples$lib.size %>% median()
+libsize_filtered <- dgl$samples$lib.size %>% median()
+
+s_manual <- libsize_raw / 10^5
+
+```
+
+<!--
+
+The optimal fitering threshold, identified by HTSFilter was `r # dgl_filter$s`.  The rule-of-thumb filtering threshold (equating to absolute read count of 10) was `r # s_manual`.  
+
+-->
+
+Median library size before filtering = `r libsize_raw`; and after filtering = `r libsize_filtered`.  
+
+There are `r nrow(dgl_raw)` genes in the raw dataset and `r nrow(dgl)` genes in the filtered dataset.    
 
 
 ```{r filter_edgeR_manual, include=FALSE}
@@ -349,20 +370,60 @@ There are `r nrow(dgl)` genes in the filtered dataset.
 
 ## Normalise
 
-Normalise using TMM (trimmed median of M-values) method.  
+Normalisation method = `r norm_method`.  (Either trimmed median of M-values method or using spike-in.)    
 
-```{r normalise}
+```{r normalise_TMM}
 
-# normalise reads
-dgl <- calcNormFactors(dgl, method = "TMM")
+if (norm_method == "TMM") {
 
-dgl$samples %>% head() %>% knitr::kable()
+  # normalise reads
+  dgl_raw <- calcNormFactors(dgl_raw, method = "TMM")
+  dgl <- calcNormFactors(dgl, method = "TMM")
+  dgl$samples %>% head() %>% knitr::kable()
+  
+}
+
+```
+
+
+<!-- Or normalise to spike-in.  Do not do both!  -->
+
+```{r normalise_spike}
+
+if (norm_method == "spike") {
+
+  # normalise reads
+  norm.factors <- spike_in_factor / dgl$samples$lib.size
+  norm.factors <- norm.factors / prod(norm.factors)^(1/length(norm.factors))
+  dgl$samples$norm.factors <- norm.factors
+  
+  dgl$samples %>% head() %>% knitr::kable()
+
+}
 
 ```
 
 
 <br>
 <br>
+
+```{r plot_libsize}
+
+library_plot_density(
+  cpm_raw = dgl_raw %>% cpm(normalized.lib.sizes = TRUE),
+  cpm_filtered = dgl %>% cpm(normalized.lib.sizes = TRUE)
+)
+
+dgl %>% 
+  cpm(normalized.lib.sizes = FALSE) %>% 
+  library_plot() + ggtitle("Libraries before normalisation")
+
+dgl %>% 
+  cpm(normalized.lib.sizes = TRUE) %>% 
+  library_plot() + ggtitle("Libraries after normalisation")
+
+```
+
 
 ## Unbiased exploration
 
@@ -386,14 +447,14 @@ plotMDS(
 
 ```{r PCA}
 
-pca <- pca_plot(dgl, labels = 'library', color = 'group', 'PC1','PC2') 
+pca <- pca_plot_RWH(dgl, labels = 'library', color = 'group', 'PC1','PC2') 
 pca$scree_plot
 pca$pca_plot + sc_miR_groups
 
-pca <- pca_plot(dgl, labels = 'library', color = 'group', 'PC1','PC3') 
+pca <- pca_plot_RWH(dgl, labels = 'library', color = 'group', 'PC1','PC3') 
 pca$pca_plot + sc_miR_groups
 
-pca <- pca_plot(dgl, labels = 'library', color = 'group', 'PC2','PC3') 
+pca <- pca_plot_RWH(dgl, labels = 'library', color = 'group', 'PC2','PC3') 
 pca$pca_plot + sc_miR_groups
 
 

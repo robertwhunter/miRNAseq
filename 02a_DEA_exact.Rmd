@@ -1,0 +1,121 @@
+---
+title: "miRNA pipeline: differential expression analysis"
+author: "RWH"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+
+output: 
+  html_document:
+    theme: yeti 
+    highlight: pygments 
+    anchor_sections: FALSE
+---
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = TRUE) 
+
+library(tidyverse)
+library(here)
+library(edgeR)
+
+dir_scripts <- here(dir_root, "scripts")
+dir_save <- here(dir_data, "RMD_output")
+
+source(here(dir_scripts, "plotting_themes.R"))
+source(here(dir_scripts, "plotting.R"))
+source(here(dir_scripts, "analysis.R"))
+
+```
+
+```{r set_parameters}
+
+# DEA analysis
+fdr_threshold <- 0.05   # 0.05
+fc_threshold <- 1.5     # 2
+
+```
+
+```{r load_dgl}
+
+dea_objects <- readRDS(file = here(dir_save, "dea_objects.rds"))
+
+dgl <- dea_objects$dgl
+df_samples <- dea_objects$df_samples
+contrast_name <- dea_objects$contrast_name
+
+```
+
+
+<br>
+<br>
+
+## Analysis parameters  
+
+In the differential expression analysis, genes that are `r fc_threshold`-fold differentially expressed with an FDR < `r fdr_threshold` are considered significant.  
+
+<br>
+<br>
+
+
+## Differential expression analysis
+
+Construct a simple two-group model - or add in additional variables in a fixed-effect model.  
+
+```{r DEA}
+
+dgl <- estimateDisp(dgl)
+de <- exactTest(dgl)
+
+```
+
+
+Top 20 most differentially expressed genes are:  
+
+```{r top_20_dea }
+
+top_genes <- topTags(de, n=20, adjust.method = "BH") # Benjamini & Hochberg FDR)
+top_genes$table %>% knitr::kable()
+
+df_dea_results <- topTags(de, n=nrow(dgl), sort.by='none', adjust.method = "BH")$table
+
+```
+
+
+```{r volcano_plot}
+
+df_dea_results %>% 
+  df_prep_volcano(fc_threshold = fc_threshold, fdr_threshold = fdr_threshold) %>% 
+  volcano_plot_RWH() + sc_volcano
+
+DE_genes <- rownames(df_dea_results)[abs(df_dea_results$logFC) >= log2(fc_threshold) &
+                                         df_dea_results$FDR <= fdr_threshold ] 
+
+```
+
+`r length(DE_genes)` genes are differentially expressed with a fold-change of at least `r fc_threshold` and an FDR below `r fdr_threshold`.  
+
+
+<br>
+<br>
+
+### Top genes
+
+Expression plots for top 8 differentially expressed genes:  
+
+```{r plot_top_genes}
+
+plot_gene_dotplot_RWH_many(rownames(top_genes$table)[1:4], dgl) + sf_miR_groups
+
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[1], dgl) + sf_miR_groups
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[2], dgl) + sf_miR_groups
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[3], dgl) + sf_miR_groups
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[4], dgl) + sf_miR_groups
+
+
+```
+
+```{r save_dea_genes}
+
+df_dea_results %>% write_csv(here(dir_save, "dea.csv"))
+
+```

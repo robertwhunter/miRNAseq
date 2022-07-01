@@ -20,6 +20,11 @@ sf_miR_3_groups <- scale_fill_locuszoom()
 
 sc_miR_highlights <- scale_color_manual(values = c("lightgrey", "red"))
 
+sc_volcano <- scale_colour_manual(
+  name = 'change',
+  values = setNames(c('red','blue', 'grey'),
+           c('up', 'down', 'not significant')))
+
 # sc_miR1 <- scale_colour_brewer(palette = "Paired")
 # sf_miR1 <- scale_fill_brewer(palette = "Paired")
 # sc_miR2 <- scale_colour_brewer(palette = "Spectral")

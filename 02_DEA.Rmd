@@ -1,9 +1,8 @@
 ---
-title: 'miRNA pipeline: differential expression analysis'
+title: 'RNAseq: differential expression analysis'
 author: "RWH"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 output:
-  pdf_document: default
   html_document:
     anchor_sections: no
     highlight: pygments

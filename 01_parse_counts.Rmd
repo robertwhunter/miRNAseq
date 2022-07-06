@@ -1,5 +1,5 @@
 ---
-title: "miRNA pipeline: count, filter, normalise"
+title: "RNAseq: count, filter, normalise"
 author: "RWH"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 

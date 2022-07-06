@@ -221,7 +221,7 @@ plot_gene_dotplot_RWH_many <- function(gene_to_plot, dgl){
 #    geom_text_repel(aes(label = sample), show.legend = FALSE) +
     xlab("group") +
     ylab("expression (cpm)") +
-    facet_wrap(~gene, scales = "free", ncol = 2) +
+    facet_wrap(~gene, scales = "free", ncol = 3) +
     theme_miR_vertical() +
     theme(strip.text = element_text(size = rel(0.5)))
 #    coord_flip()

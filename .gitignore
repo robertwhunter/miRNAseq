@@ -40,9 +40,10 @@ vignettes/*.pdf
 .Renviron
 .Rproj.user
 
-# My notes
+# My notes and data
 README_private.md
 miRNAmap.pptx
 pipelines/prep_script.bash
 scripts/plotting_EdGen.R
 *.html
+*.pdf

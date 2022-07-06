@@ -1,0 +1,188 @@
+---
+title: 'miRNA pipeline: differential expression analysis'
+author: "RWH"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    anchor_sections: no
+    highlight: pygments
+    theme: yeti
+---
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = TRUE) 
+
+library(tidyverse)
+library(here)
+library(edgeR)
+
+dir_scripts <- here(dir_root, "scripts")
+dir_save <- here(dir_data, "RMD_output")
+
+source(here(dir_scripts, "plotting_themes.R"))
+source(here(dir_scripts, "plotting.R"))
+source(here(dir_scripts, "analysis.R"))
+
+```
+
+```{r set_parameters}
+
+## DEA analysis
+fdr_threshold <- 0.05   # 0.05
+fc_threshold <- 2     # 2
+
+## model type
+# model_type <- "exact"
+model_type <- "glm_simple"
+# model_type <- "glm_with_covariate"
+
+```
+
+```{r load_dgl}
+
+dea_objects <- readRDS(file = here(dir_save, "dea_objects.rds"))
+
+dgl <- dea_objects$dgl
+df_samples <- dea_objects$df_samples
+contrast_name <- dea_objects$contrast_name
+
+```
+
+
+<br>
+<br>
+
+## Analysis parameters  
+
+In the differential expression analysis, genes that are `r fc_threshold`-fold differentially expressed with an FDR < `r fdr_threshold` are considered significant.  
+
+Model type = `r model_type`.  
+
+<br>
+<br>
+
+
+## Differential expression analysis
+
+```{r DEA_exact}
+
+if (model_type == "exact") {
+  
+  dgl <- estimateDisp(dgl)
+  de <- exactTest(dgl) # pair = 2:1 if required to set correct direction of change
+  
+}
+
+```
+
+```{r DEA_glm_simple}
+
+if (model_type == "glm_simple") {
+
+  design <- model.matrix(~0+group, data = dgl$samples)
+  dgl <- estimateDisp(dgl, design)
+  
+  contrast_matrix <- makeContrasts(contrasts=contrast_name, levels=design)
+  fit <- glmQLFit(dgl, design)
+  
+  de <- glmQLFTest(fit, contrast = contrast_matrix)
+
+}
+
+```
+
+```{r DEA_glm_with_covariate}
+
+if (model_type == "glm_with_covariate") {
+
+  design <- model.matrix(~0+group+sex, data = dgl$samples)
+  dgl <- estimateDisp(dgl, design)
+  
+  contrast_matrix <- makeContrasts(contrasts=contrast_name, levels=design)
+  fit <- glmQLFit(dgl, design)
+  
+  de <- glmQLFTest(fit, contrast = contrast_matrix)
+
+}
+
+```
+
+
+```{r DEA_genes}
+
+df_dea_results <- topTags(de, 
+                          n=nrow(dgl), 
+                          sort.by='none', 
+                          adjust.method = "BH")$table # Benjamini & Hochberg FDR
+
+DE_genes <- rownames(df_dea_results)[abs(df_dea_results$logFC) >= log2(fc_threshold) &
+                                         df_dea_results$FDR <= fdr_threshold ] 
+
+sig_genes <- df_dea_results %>% filter(FDR <= fdr_threshold & abs(logFC) >= log2(fc_threshold))
+
+```
+
+<br>
+
+`r length(DE_genes)` genes are differentially expressed with a fold-change of at least `r fc_threshold` and an FDR below `r fdr_threshold`.  
+
+<br>
+
+
+The differentially expressed genes are:  
+
+```{r top_20}
+
+sig_genes %>% knitr::kable()
+
+```
+
+
+<br>
+<br>
+
+### MD plot
+
+```{r MDplot}
+plotMD(de)
+
+```
+
+<br>
+
+### Volcano plot
+
+```{r volcano_plot, warning=F}
+
+df_dea_results %>% 
+  df_prep_volcano(fc_threshold = fc_threshold, fdr_threshold = fdr_threshold) %>% 
+  volcano_plot_RWH() + sc_volcano
+
+```
+
+<br>
+<br>
+
+### Top genes
+
+Expression plots for top 6 differentially expressed genes:  
+
+```{r plot_top_genes}
+
+plot_gene_dotplot_RWH_many(rownames(sig_genes)[1:6], dgl) + sf_miR_groups
+
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[1], dgl) + sf_miR_groups
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[2], dgl) + sf_miR_groups
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[3], dgl) + sf_miR_groups
+# plot_gene_dotplot_RWH(rownames(top_genes$table)[4], dgl) + sf_miR_groups
+
+
+```
+
+```{r save_dea_genes}
+
+df_dea_results %>% write_csv(here(dir_save, "dea.csv"))
+
+```

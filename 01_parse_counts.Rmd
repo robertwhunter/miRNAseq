@@ -1,5 +1,5 @@
 ---
-title: "miRNA pipeline: parse counts"
+title: "miRNA pipeline: count, filter, normalise"
 author: "RWH"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 
@@ -43,38 +43,9 @@ norm_method <- "TMM" # TMM or spike
 
 ```
 
-<br>
-<br>
-
-## Overview of experimental design
-
-```{r experimental_description, child=here(dir_data, "exp_setup.txt"), warning=FALSE}
-
-```
-
-<br>
-<br>
-
-## Analysis parameters  
-
-This analysis looks at `r # analysis_scope` reads mapping to mature forms of miRNA.  
-
-<!-- When filtering data, genes are retained if they are expressed at levels over `r # cpm_threshold` cpm in at least `r # n_samples` libraries.  -->
-
-<br>
-<br>
-
-## Constructing DGEList object in edgeR
-
-DGEList contains:  
-
-- counts = matrix of counts
-- samples = df of sample information, to include group & lib.size  
-- genes (optional) = df of gene annotation features
-
-
 ```{r import_counts, message = FALSE}
 
+# first import raw data to generate a single counts .csv
 # source(here(dir_data, "x1_import_counts.R"))
 
 df_rawcounts <- read_csv(here(dir_save, "rawcounts.csv"))
@@ -124,7 +95,6 @@ df_rawcounts <- read_csv(here(dir_save, "rawcounts.csv"))
 
 ```
 
-
 ```{r import_metadata}
 
 df_samples <- read_csv(here(dir_data, "meta.csv"))
@@ -137,11 +107,39 @@ left_join(df_samples, df_libsize) -> df_samples
 
 source(here(dir_data, "x2_repair_names.R"))
 
+```
+
+
+## Overview of experimental design
+
+```{r experimental_description, child=here(dir_data, "exp_setup.txt"), warning=FALSE}
 
 ```
 
 <br>
 <br>
+
+### Sample metadata
+
+```{r groups}
+
+df_samples %>% knitr::kable()
+
+```
+
+<br>
+<br>
+
+## Analysis parameters  
+
+This analysis looks at `r # analysis_scope` reads mapping to mature forms of miRNA.  
+
+<!-- When filtering data, genes are retained if they are expressed at levels over `r # cpm_threshold` cpm in at least `r # n_samples` libraries.  -->
+
+<br>
+<br>
+
+## Mapping
 
 Extent of mapping.  Note that in this analysis, the denominator is the total number of reads in the trimmed libraries (i.e. before deduplication).  Therefore this will include duplicate UMIs and so will end up slightly under-estimating the proportion of deduplicated reads that are mapped.  
 
@@ -167,11 +165,13 @@ df_map_summary$genome %>%
   fct_rev() -> df_map_summary$genome
 
 df_samples_short <- df_samples %>% select(library = sample, group)
+df_map_summary$library <- df_map_summary$library %>% as.factor() %>% fct_relevel(levels(df_samples$sample))
 
 df_map_summary %>% 
   left_join(df_samples_short) %>% 
   ggplot(aes(x = library, y = mapped_pc, fill = genome)) +
     geom_col() +
+    ylab("reads mapped (%)") +
     coord_flip() +
     theme_miR_vertical() +
     facet_wrap(~group) +
@@ -180,9 +180,24 @@ df_map_summary %>%
 ```
 
 
-### Make DGL object
+## Make DGL object
 
-```{r make_dgl}
+Construct DGL object for differential expression analysis in edgeR.  
+
+```{r make_dgl, warning = FALSE}
+
+# Construct DGEList object in edgeR
+# 
+# DGEList contains:  
+# 
+# - counts = matrix of counts
+# - samples = df of sample information, to include group & lib.size  
+# - genes (optional) = df of gene annotation features
+
+
+# ensure rawcounts and sample orders are the same
+libraries_in_order <- df_samples$sample %>% levels()
+df_rawcounts <- df_rawcounts %>% select(gene, genome, libraries_in_order)
 
 # convert rawcounts to named matrix
 df_rawcounts_trim <- df_rawcounts %>% select(-genome)
@@ -223,11 +238,13 @@ dgl_raw$samples %>% head() %>% knitr::kable()
 <br>
 <br>
 
-## Filter
+## Filter & normalise
 
-Filter out low-abundance reads.  (Can also collapse technical replicates at this point.)  
+<!-- 
 
-```{r get_cpm}
+```{r get_cpm, eval = FALSE}
+
+# NB can also collapse technical replicates at this point if applicable
 
 counts_raw <- dgl_raw$counts %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
 counts_cpm <- cpm(dgl_raw) %>% as_tibble(rownames = NA) %>% rownames_to_column("gene")
@@ -278,20 +295,16 @@ counts_cpm_summary %>%
 
 ```
 
-<br>
-<br>
-
-<!-- 
 Raw counts for 10 most highly-expressed genes in first 8 samples: 
 
-```{r print_raw}
+```{r print_raw, eval = F}
 counts_raw[,1:9] %>% head(n = 10) %>% knitr::kable()
 ```
 
 
 Same counts expressed as cpm:
 
-```{r print_cpm}
+```{r print_cpm, eval = F}
 counts_cpm[,1:9] %>% head(n = 10) %>% knitr::kable(digits = 0)
 
 ```
@@ -299,7 +312,7 @@ counts_cpm[,1:9] %>% head(n = 10) %>% knitr::kable(digits = 0)
 
 Distribution of gene abundance:
 
-```{r plot_cpm}
+```{r plot_cpm, eval = F}
 
 library(scales)
 
@@ -317,28 +330,24 @@ counts_cpm %>%
 
 -->
 
-We then filter out any genes that are not expressed at high abundance.  
+Filter out any genes that are not expressed at high abundance (using default edgeR parameters).  
 
-```{r filter_manual_archived}
+```{r filter}
 
+## option 1 = manual
+#
 # dgl <- dgl[rowSums(cpm(dgl) >= cpm_threshold) >= n_samples, , keep.lib.sizes=FALSE]
+
+## option 2 = HTSFilter
+#
+# dgl_filter <- HTSFilter(dgl_raw, normalization = "TMM", plot = FALSE)
+# dgl <- dgl_filter$filteredData
 
 dgl_keep <- filterByExpr(dgl_raw)     # this accesses group (or can supply a different design)
 dgl <- dgl_raw[dgl_keep, , keep.lib.sizes=FALSE]
 
-
-```
-
-
-```{r filter_auto}
-
-# dgl_filter <- HTSFilter(dgl_raw, normalization = "TMM", plot = FALSE)
-# 
-# dgl <- dgl_filter$filteredData
-# 
 libsize_raw <- dgl_raw$samples$lib.size %>% median()
 libsize_filtered <- dgl$samples$lib.size %>% median()
-
 s_manual <- libsize_raw / 10^5
 
 ```
@@ -349,7 +358,7 @@ The optimal fitering threshold, identified by HTSFilter was `r # dgl_filter$s`. 
 
 -->
 
-Median library size before filtering = `r libsize_raw`; and after filtering = `r libsize_filtered`.  
+Median library size before filtering = `r format(libsize_raw, scientific = F, big.mark = ",", digits = 0)`; and after filtering = `r format(libsize_filtered, scientific = F, big.mark = ",", digits = 0)`.  
 
 There are `r nrow(dgl_raw)` genes in the raw dataset and `r nrow(dgl)` genes in the filtered dataset.    
 
@@ -368,9 +377,9 @@ There are `r nrow(dgl_raw)` genes in the raw dataset and `r nrow(dgl)` genes in 
 <br>
 <br>
 
-## Normalise
-
 Normalisation method = `r norm_method`.  (Either trimmed median of M-values method or using spike-in.)    
+
+Top rows after normalisation (note normalisation factors):  
 
 ```{r normalise_TMM}
 
@@ -406,6 +415,7 @@ if (norm_method == "spike") {
 
 <br>
 <br>
+Library size profiles after filtering and normalisation:  
 
 ```{r plot_libsize}
 
@@ -424,6 +434,8 @@ dgl %>%
 
 ```
 
+<br>
+<br>
 
 ## Unbiased exploration
 

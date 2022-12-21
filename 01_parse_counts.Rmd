@@ -25,6 +25,7 @@ dir_save <- here(dir_data, "RMD_output")
 source(here(dir_scripts, "plotting_themes.R"))
 source(here(dir_scripts, "plotting.R"))
 source(here(dir_scripts, "analysis.R"))
+source(here(dir_scripts, "clustering.R"))
 
 ```
 
@@ -106,6 +107,9 @@ df_libsize$sample <- df_libsize$library %>% gsub(".trim.fq", "", .)
 left_join(df_samples, df_libsize) -> df_samples
 
 source(here(dir_data, "x2_repair_names.R"))
+
+df_samples %>% select(sample_name = sample, group) -> df_samples_short
+
 
 ```
 
@@ -358,7 +362,7 @@ The optimal fitering threshold, identified by HTSFilter was `r # dgl_filter$s`. 
 
 -->
 
-Median library size before filtering = `r format(libsize_raw, scientific = F, big.mark = ",", digits = 0)`; and after filtering = `r format(libsize_filtered, scientific = F, big.mark = ",", digits = 0)`.  
+Median library size before filtering = `r format(libsize_raw, scientific = F, big.mark = ",", digits = 1)`; and after filtering = `r format(libsize_filtered, scientific = F, big.mark = ",", digits = 1)`.  
 
 There are `r nrow(dgl_raw)` genes in the raw dataset and `r nrow(dgl)` genes in the filtered dataset.    
 
@@ -472,6 +476,16 @@ pca$pca_plot + sc_miR_groups
 
 ```
 
+<!-- PCA plot generated using alternative method (prcomp): -->
+
+```{r pca_prcomp, eval = FALSE}
+
+# for some reason running fine in testing but not knitting
+cpm(dgl) %>% as.data.frame() %>% pca_plot_RWH_prcomp(df_meta = df_samples_short) + sc_miR_groups
+
+```
+
+
 
 Significance testing:
 
@@ -481,6 +495,16 @@ pca_pvals(pca$pca, c('group'), dgl) %>% knitr::kable()
 
 ```
 
+<!-- Unsupervised clustering: -->
+
+```{r clustering, eval = FALSE}
+
+# for some reason running fine in testing but not knitting
+cpm(dgl) %>% as.data.frame() %>% dendrogram_RWH(df_meta = df_samples_short) # + sf_miR_groups
+
+```
+
+
 ```{r save_dgl}
 
 list(
@@ -489,4 +513,7 @@ list(
   dgl = dgl) %>% saveRDS(file = here(dir_save, "dea_objects.rds"))
 
 ```
+
+
+
 

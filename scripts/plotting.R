@@ -1,9 +1,12 @@
 # pca_plot() ----
 
 library(ggplot2)
+library(lemon)
 library(ggrepel)
 library(ggtext)
 library(ggridges)
+library(pheatmap)
+
 
 library_plot <- function(cpm_plot) {
   
@@ -119,7 +122,7 @@ pca_plot_RWH <- function(dgl, labels, color, PC1, PC2) {
 df_prep_volcano <- function(df_results, fc_threshold = 2, fdr_threshold = 0.05) {
 
   df_results %>% 
-    add_rownames("gene") %>% 
+    rownames_to_column("gene") %>% 
     mutate(
       change = case_when(
         # abs(logFC) > log2(fc_threshold) & PValue < fdr_threshold & FDR >= fdr_threshold ~ "p sig (but not fdr)",
@@ -149,10 +152,12 @@ volcano_plot_RWH <- function(df_results){
     # geom_vline(xintercept = log2(fc_threshold)) +
     # geom_vline(xintercept = -log2(fc_threshold)) +
     # geom_hline(yintercept = -log10(0.05)) +
-    xlab("log fold-change") +
+    scale_x_symmetric(mid = 0) +
+    xlab("log<sub>2</sub>(fold-change)") +
     ylab("-log<sub>10</sub>(p-value)") +
     theme_miR() +
     theme(
+      axis.title.x = element_markdown(),
       axis.title.y = element_markdown(),
       plot.title = element_markdown())
 }
@@ -205,7 +210,7 @@ plot_gene_dotplot_RWH <- function(gene, dgl){
   
 }
 
-plot_gene_dotplot_RWH_many <- function(gene_to_plot, dgl){
+plot_gene_dotplot_RWH_many <- function(gene_to_plot, dgl, show_sample_labels = FALSE){
   
   df_plot <- cpm(dgl) %>% as.data.frame() %>% rownames_to_column("gene")
   df_plot <- df_plot %>% filter(gene %in% gene_to_plot)
@@ -218,13 +223,16 @@ plot_gene_dotplot_RWH_many <- function(gene_to_plot, dgl){
     ggplot(aes(x=group, y=cpm)) + 
     geom_boxplot(width = 0.2, fill = NA, alpha = 0.5, colour = "Grey", outlier.shape = NA) +
     geom_jitter(width = 0.05, alpha = 0.3, colour = "Blue") +
-#    geom_text_repel(aes(label = sample), show.legend = FALSE) +
     xlab("group") +
     ylab("expression (cpm)") +
     facet_wrap(~gene, scales = "free", ncol = 3) +
     theme_miR_vertical() +
-    theme(strip.text = element_text(size = rel(0.5)))
-#    coord_flip()
+    theme(strip.text = element_text(size = rel(0.5))) -> p
+#    coord_flip() 
+  
+  if (show_sample_labels == TRUE) {p <- p + geom_text_repel(aes(label = sample), size = 2, colour = "red", show.legend = FALSE)}
+  
+  return(p)
 
 }
 
@@ -321,4 +329,63 @@ plot_gene_dotplot_RWH_many <- function(gene_to_plot, dgl){
 #                         values = setNames(c('red','grey'),c('yes', 'no'))) +
 #     theme_miR()
 # }
+
+
+## table re-formatting
+
+dea_reshape <- function(df_dea) {
+  
+  df_dea %>% 
+    rownames_to_column("gene") %>% 
+    mutate(FC = 2^logFC) %>% 
+    select(gene, "fold-change" = FC, logFC, logCPM, `F`, p = PValue, FDR) %>% 
+    return()
+  
+}
+
+
+## heatmap
+
+plot_heatmap_RWH <- function(dgl, genes_to_plot, clustering = TRUE, filename = "test.png") {
+  
+  # pick variables to plot
+  annotation_col <- dgl$samples %>% select(group)
+  
+  # remove genes not in the matrix
+  genes_to_plot <- genes_to_plot[genes_to_plot %in% rownames(dgl)]
+  
+  # make an expression matrix and order by sample annotation
+  expression <- cpm(dgl)[genes_to_plot, rownames(annotation_col)]
+  plotmatrix <- log2(expression + 0.1)
+  rownames(plotmatrix) <- rownames(expression)
+  
+  # define colours
+  group_names <- annotation_col$group %>% levels()
+  palette_heatmap <- palette_miR_1[1:length(group_names)]
+  heatmap_ann_col <- list(group = setNames(palette_heatmap, group_names))
+
+  # plot
+  pheatmap(
+    plotmatrix,
+    show_rownames = TRUE,
+    annotation_col = annotation_col,
+    border_color = NA,
+#   legend = FALSE,
+    cluster_cols = clustering, 
+    cluster_rows = TRUE,
+    scale = 'row',
+    color = colorRampPalette(rev(RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")))(100),
+    annotation_colors = heatmap_ann_col
+  ) -> p
+  
+  # save_pheatmap <- function(x, filename, width=600, height=600) {
+  #   png(filename, width=width, height=height)
+  #   grid::grid.newpage()
+  #   grid::grid.draw(x$gtable)
+  #   dev.off()
+  # }
+  # 
+  # save_pheatmap(p, filename)
+  
+}
 

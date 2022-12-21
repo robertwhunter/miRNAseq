@@ -9,7 +9,8 @@ library(ggridges)
 
 ## PALETTES ----
 
-palette_miR_1 <- c("red", "blue", "green", "orange", "darkgrey", "lightblue", "purple", "black")
+palette_miR_1 <- c("grey", "darkgreen", "blue", "red", "orange", "darkgrey", "lightblue", "purple", "black")
+# palette_miR_1 <- c("blue", "red", "green", "orange", "darkgrey", "lightblue", "purple", "black")
 # palette_miR_2 <- c("red", "blue", "darkgreen", "purple", "black", "pink", "orange", "lightblue", "lightgreen")
 
 sc_miR_groups <- scale_colour_manual(values = palette_miR_1)

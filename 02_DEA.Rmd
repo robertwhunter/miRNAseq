@@ -23,6 +23,7 @@ dir_save <- here(dir_data, "RMD_output")
 source(here(dir_scripts, "plotting_themes.R"))
 source(here(dir_scripts, "plotting.R"))
 source(here(dir_scripts, "analysis.R"))
+source(here(dir_scripts, "clustering.R"))
 
 ```
 
@@ -113,8 +114,13 @@ if (model_type == "glm_with_covariate") {
 
 df_dea_results <- topTags(de, 
                           n=nrow(dgl), 
-                          sort.by='none', 
+                          sort.by='PValue', 
                           adjust.method = "BH")$table # Benjamini & Hochberg FDR
+
+df_dea_top20 <- topTags(de, 
+                          n=20, 
+                          sort.by='PValue', 
+                          adjust.method = "BH")$table 
 
 DE_genes <- rownames(df_dea_results)[abs(df_dea_results$logFC) >= log2(fc_threshold) &
                                          df_dea_results$FDR <= fdr_threshold ] 
@@ -130,17 +136,32 @@ sig_genes <- df_dea_results %>% filter(FDR <= fdr_threshold & abs(logFC) >= log2
 <br>
 
 
-The differentially expressed genes are:  
+The differentially expressed genes that pass significance thresholds are:  
 
-```{r top_20}
+```{r sig_genes}
 
-sig_genes %>% knitr::kable()
+sig_genes %>% dea_reshape() %>% knitr::kable()
 
 ```
 
 
 <br>
 <br>
+
+
+The top 20 differentially expressed genes (i.e. not necessarily passing significance thresholds) are:  
+
+```{r top_20}
+
+df_dea_top20 %>% dea_reshape() %>% knitr::kable()
+
+```
+
+
+<br>
+<br>
+
+
 
 ### MD plot
 
@@ -164,13 +185,26 @@ df_dea_results %>%
 <br>
 <br>
 
+Heatmaps for differentially expressed genes (clustered and un-clustered):
+
+```{r heatmaps}
+
+dgl %>% plot_heatmap_RWH(genes_to_plot = rownames(sig_genes))
+dgl %>% plot_heatmap_RWH(genes_to_plot = rownames(sig_genes), clustering = FALSE)
+
+
+```
+
+
 ### Top genes
 
-Expression plots for top 6 differentially expressed genes:  
+Expression plots for differentially expressed genes:  
 
-```{r plot_top_genes}
+```{r plot_top_genes, fig.height = 8, warning = FALSE}
 
-plot_gene_dotplot_RWH_many(rownames(sig_genes)[1:6], dgl) + sf_miR_groups
+plot_gene_dotplot_RWH_many(rownames(sig_genes), dgl, show_sample_labels = TRUE) + sf_miR_groups
+
+# plot_gene_dotplot_RWH_many(rownames(sig_genes)[1:6], dgl) + sf_miR_groups
 
 # plot_gene_dotplot_RWH(rownames(top_genes$table)[1], dgl) + sf_miR_groups
 # plot_gene_dotplot_RWH(rownames(top_genes$table)[2], dgl) + sf_miR_groups
@@ -180,8 +214,12 @@ plot_gene_dotplot_RWH_many(rownames(sig_genes)[1:6], dgl) + sf_miR_groups
 
 ```
 
+
 ```{r save_dea_genes}
 
-df_dea_results %>% write_csv(here(dir_save, "dea.csv"))
+df_dea_results %>% 
+  rownames_to_column("gene") %>% 
+  write_csv(here(dir_save, "dea.csv"))
 
 ```
+

@@ -71,7 +71,7 @@ pca_plot_RWH <- function(dgl, labels, color, PC1, PC2) {
   pcavals_m <- pcavals %>% t() %>% as.matrix(scale = T)
   
   pca <- prcomp(pcavals_m)                                                        # do pca
-  fraction_explained <- round((pca$sdev)^2/sum(pca$sdev^2), 3) * 100              # get raction of variance explained by each pc 
+  fraction_explained <- round((pca$sdev)^2/sum(pca$sdev^2), 3) * 100              # get fraction of variance explained by each pc 
   
   ## pca plot
   guides <- guides(shape=NULL)

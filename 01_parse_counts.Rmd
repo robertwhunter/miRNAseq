@@ -18,6 +18,7 @@ library(tidyverse)
 library(here)
 # library(HTSFilter)
 library(edgeR)
+library(patchwork)
 
 dir_scripts <- here(dir_root, "scripts")
 dir_save <- here(dir_data, "RMD_output")
@@ -461,18 +462,20 @@ plotMDS(
 
 ### Principle component analysis (PCA)
 
-```{r PCA}
+```{r PCA,  fig.width = 12, fig.height = 6}
 
-pca <- pca_plot_RWH(dgl, labels = 'library', color = 'group', 'PC1','PC2') 
-pca$scree_plot
-pca$pca_plot + sc_miR_groups
+pca <- pca_plot_RWH(dgl, labels = 'sample', color = 'group', 'PC1','PC2') 
+pca$scree_plot -> p1
+pca$pca_plot + sc_miR_groups + guides(color = guide_legend(title = "group")) -> p2
 
-pca <- pca_plot_RWH(dgl, labels = 'library', color = 'group', 'PC1','PC3') 
-pca$pca_plot + sc_miR_groups
+pca <- pca_plot_RWH(dgl, labels = 'sample', color = 'group', 'PC1','PC3') 
+pca$pca_plot + sc_miR_groups + guides(color = guide_legend(title = "group")) -> p3
 
-pca <- pca_plot_RWH(dgl, labels = 'library', color = 'group', 'PC2','PC3') 
-pca$pca_plot + sc_miR_groups
+pca <- pca_plot_RWH(dgl, labels = 'sample', color = 'group', 'PC2','PC3') 
+pca$pca_plot + sc_miR_groups + guides(color = guide_legend(title = "group")) -> p4
 
+p1 + p2 + p3 + p4 +
+  plot_layout(ncol = 2, guides = "collect")
 
 ```
 
